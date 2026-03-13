@@ -2,6 +2,7 @@ import "dotenv/config";
 import { createInterface } from "readline/promises";
 import { randomUUID } from "crypto";
 import { writeFileSync, mkdirSync } from "fs";
+import { startServer, waitForOtp, stopServer } from "./sms-server.mjs";
 
 const BASE_URL = "https://shebaconnect.sheba.co.il/SCDmzService.API/api";
 const SESSION_IP = randomUUID();
@@ -194,12 +195,24 @@ async function prompt(rl, message) {
 }
 
 async function main() {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const autoOtp = process.argv.includes("--auto-otp");
+  const rl = autoOtp ? null : createInterface({ input: process.stdin, output: process.stdout });
 
   try {
+    if (autoOtp) {
+      await startServer();
+    }
+
     await sendOTP();
 
-    const otpCode = await prompt(rl, "\nEnter the SMS code: ");
+    let otpCode;
+    if (autoOtp) {
+      console.log("\nWaiting for OTP from SMS Forwarder...");
+      otpCode = await waitForOtp();
+      console.log(`Received OTP: ${otpCode}`);
+    } else {
+      otpCode = await prompt(rl, "\nEnter the SMS code: ");
+    }
     const userToken = await verifyOTP(otpCode);
 
     console.log("\nFetching future appointments...");
@@ -223,7 +236,8 @@ async function main() {
     console.error(`\nError: ${err.message}`);
     process.exit(1);
   } finally {
-    rl.close();
+    if (rl) rl.close();
+    if (autoOtp) stopServer();
   }
 }
 
