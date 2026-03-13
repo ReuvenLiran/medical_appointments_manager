@@ -3,6 +3,8 @@ import { createInterface } from "readline/promises";
 import { randomUUID } from "crypto";
 import { writeFileSync, mkdirSync } from "fs";
 import { SmsClient } from "sms-client";
+import puppeteer from "puppeteer-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
 const BASE_URL = "https://shebaconnect.sheba.co.il/SCDmzService.API/api";
 const SESSION_IP = randomUUID();
@@ -43,13 +45,143 @@ async function apiPost(endpoint, body) {
   return res.json();
 }
 
-async function sendOTP() {
+puppeteer.use(StealthPlugin());
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+async function humanType(page, selector, text) {
+  await humanClick(page, selector);
+  await sleep(rand(300, 600));
+  for (const ch of text) {
+    await page.keyboard.type(ch);
+    await sleep(rand(80, 220));
+  }
+  await sleep(rand(400, 800));
+}
+
+async function humanMove(page, targetX, targetY, steps = 25) {
+  const start = await page.evaluate(() => ({
+    x: window.__lastMouseX || 100,
+    y: window.__lastMouseY || 100,
+  }));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = start.x + (targetX - start.x) * t + rand(-3, 3);
+    const y = start.y + (targetY - start.y) * t + rand(-2, 2);
+    await page.mouse.move(x, y);
+    await sleep(rand(10, 30));
+  }
+  await page.evaluate((x, y) => {
+    window.__lastMouseX = x;
+    window.__lastMouseY = y;
+  }, targetX, targetY);
+}
+
+async function humanClick(page, selector) {
+  const el = await page.waitForSelector(selector);
+  const box = await el.boundingBox();
+  const x = box.x + box.width / 2 + rand(-3, 3);
+  const y = box.y + box.height / 2 + rand(-2, 2);
+  await humanMove(page, x, y);
+  await sleep(rand(100, 300));
+  await page.mouse.click(x, y);
+}
+
+async function solveRecaptcha() {
+  console.log("Opening browser to solve reCAPTCHA...");
+  const browser = await puppeteer.launch({
+    headless: false,
+    args: ["--window-size=700,600"],
+  });
+  const page = await browser.newPage();
+  await page.setViewport({ width: 700, height: 600 });
+
+  await page.goto("https://shebaconnect.sheba.co.il", { waitUntil: "networkidle0" });
+  await sleep(rand(1500, 2500));
+
+  // Wait for the login form to be ready
+  await page.waitForSelector("#idNumber", { timeout: 10000 });
+  console.log("  Form loaded, typing credentials...");
+
+  // Type ID and phone slowly like a human
+  await humanType(page, "#idNumber", PATIENT_ID);
+  await sleep(rand(500, 1000));
+  await humanType(page, "#phoneNumber", MOBILE);
+  await sleep(rand(800, 1500));
+
+  // Verify the values were entered
+  const idVal = await page.$eval("#idNumber", (el) => el.value);
+  const phoneVal = await page.$eval("#phoneNumber", (el) => el.value);
+  console.log(`  ID field: ${idVal}, Phone field: ${phoneVal}`);
+
+  // Scroll the submit button into view and click it
+  console.log("  Clicking submit...");
+  const submitBtn = await page.waitForSelector("button.login-submit");
+  await submitBtn.scrollIntoViewIfNeeded();
+  await sleep(rand(300, 600));
+  await humanClick(page, "button.login-submit");
+
+  // Wait for the page to respond - either captcha appears or navigation
+  console.log("  Waiting for captcha to appear...");
+  try {
+    await page.waitForSelector("re-captcha, iframe[src*='recaptcha'], .g-recaptcha", { timeout: 20000 });
+  } catch {
+    // Take screenshot to debug what's on the page
+    await page.screenshot({ path: "debug-after-submit.png" });
+    console.log("  Page title:", await page.title());
+    console.log("  Page URL:", page.url());
+    // Check for error messages
+    const errors = await page.$$eval("[class*='error'], [class*='alert']", (els) => els.map((e) => e.textContent.trim()).filter(Boolean));
+    if (errors.length) console.log("  Errors on page:", errors);
+    throw new Error("Captcha did not appear - check debug-after-submit.png");
+  }
+
+  // Wait for the iframe to fully load inside the re-captcha component
+  await page.waitForSelector("iframe[src*='recaptcha']", { timeout: 15000 });
+  await sleep(rand(2000, 4000));
+
+  // Move mouse around a bit before going to captcha
+  await humanMove(page, rand(200, 400), rand(200, 300));
+  await sleep(rand(500, 1000));
+  await humanMove(page, rand(100, 300), rand(250, 350));
+  await sleep(rand(1000, 2000));
+
+  // Find the captcha checkbox and click it with human-like movement
+  const recaptchaEl = await page.waitForSelector("iframe[title='reCAPTCHA']");
+  const recaptchaBox = await recaptchaEl.boundingBox();
+  // The checkbox is at roughly (33, 33) inside the iframe
+  const checkboxX = recaptchaBox.x + 33 + rand(-4, 4);
+  const checkboxY = recaptchaBox.y + 33 + rand(-4, 4);
+  await humanMove(page, checkboxX, checkboxY, 35);
+  await sleep(rand(200, 500));
+  await page.mouse.click(checkboxX, checkboxY);
+
+  console.log("Clicked reCAPTCHA checkbox, waiting for token...");
+  const token = await page.evaluate(() => {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("reCAPTCHA timeout")), 120000);
+      const check = setInterval(() => {
+        try {
+          const resp = grecaptcha.getResponse();
+          if (resp) { clearInterval(check); clearTimeout(timeout); resolve(resp); }
+        } catch {}
+      }, 500);
+    });
+  });
+
+  await browser.close();
+  console.log("reCAPTCHA solved.");
+  return token;
+}
+
+async function sendOTP(recaptchaToken = "") {
   console.log(`Sending OTP to ${MOBILE}...`);
   const data = await apiPost("/Authentication/SendOTPByMobile", {
     PatientID: PATIENT_ID,
     IsVoiceMailChecked: false,
     Mobile: MOBILE,
-    GRecaptchaResponse: "",
+    GRecaptchaResponse: recaptchaToken,
   });
 
   if (!data.Success) {
@@ -202,7 +334,13 @@ async function main() {
   const rl = autoOtp ? null : createInterface({ input: process.stdin, output: process.stdout });
 
   try {
-    await sendOTP();
+    try {
+      await sendOTP();
+    } catch {
+      console.log("Captcha required, opening browser...");
+      const recaptchaToken = await solveRecaptcha();
+      await sendOTP(recaptchaToken);
+    }
 
     let otpCode;
     if (autoOtp) {
