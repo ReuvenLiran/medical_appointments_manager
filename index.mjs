@@ -89,7 +89,6 @@ async function humanClick(page, selector) {
 }
 
 async function solveRecaptcha() {
-  console.log("Opening browser to solve reCAPTCHA...");
   const browser = await puppeteer.launch({
     headless: false,
     args: ["--window-size=700,600"],
@@ -100,64 +99,35 @@ async function solveRecaptcha() {
   await page.goto("https://shebaconnect.sheba.co.il", { waitUntil: "networkidle0" });
   await sleep(rand(1500, 2500));
 
-  // Wait for the login form to be ready
   await page.waitForSelector("#idNumber", { timeout: 10000 });
-  console.log("  Form loaded, typing credentials...");
 
-  // Type ID and phone slowly like a human
   await humanType(page, "#idNumber", PATIENT_ID);
   await sleep(rand(500, 1000));
   await humanType(page, "#phoneNumber", MOBILE);
   await sleep(rand(800, 1500));
 
-  // Verify the values were entered
-  const idVal = await page.$eval("#idNumber", (el) => el.value);
-  const phoneVal = await page.$eval("#phoneNumber", (el) => el.value);
-  console.log(`  ID field: ${idVal}, Phone field: ${phoneVal}`);
-
-  // Scroll the submit button into view and click it
-  console.log("  Clicking submit...");
   const submitBtn = await page.waitForSelector("button.login-submit");
   await submitBtn.scrollIntoViewIfNeeded();
   await sleep(rand(300, 600));
   await humanClick(page, "button.login-submit");
 
-  // Wait for the page to respond - either captcha appears or navigation
-  console.log("  Waiting for captcha to appear...");
-  try {
-    await page.waitForSelector("re-captcha, iframe[src*='recaptcha'], .g-recaptcha", { timeout: 20000 });
-  } catch {
-    // Take screenshot to debug what's on the page
-    await page.screenshot({ path: "debug-after-submit.png" });
-    console.log("  Page title:", await page.title());
-    console.log("  Page URL:", page.url());
-    // Check for error messages
-    const errors = await page.$$eval("[class*='error'], [class*='alert']", (els) => els.map((e) => e.textContent.trim()).filter(Boolean));
-    if (errors.length) console.log("  Errors on page:", errors);
-    throw new Error("Captcha did not appear - check debug-after-submit.png");
-  }
-
-  // Wait for the iframe to fully load inside the re-captcha component
+  await page.waitForSelector("re-captcha, iframe[src*='recaptcha'], .g-recaptcha", { timeout: 20000 });
   await page.waitForSelector("iframe[src*='recaptcha']", { timeout: 15000 });
   await sleep(rand(2000, 4000));
 
-  // Move mouse around a bit before going to captcha
   await humanMove(page, rand(200, 400), rand(200, 300));
   await sleep(rand(500, 1000));
   await humanMove(page, rand(100, 300), rand(250, 350));
   await sleep(rand(1000, 2000));
 
-  // Find the captcha checkbox and click it with human-like movement
   const recaptchaEl = await page.waitForSelector("iframe[title='reCAPTCHA']");
   const recaptchaBox = await recaptchaEl.boundingBox();
-  // The checkbox is at roughly (33, 33) inside the iframe
   const checkboxX = recaptchaBox.x + 33 + rand(-4, 4);
   const checkboxY = recaptchaBox.y + 33 + rand(-4, 4);
   await humanMove(page, checkboxX, checkboxY, 35);
   await sleep(rand(200, 500));
   await page.mouse.click(checkboxX, checkboxY);
 
-  console.log("Clicked reCAPTCHA checkbox, waiting for token...");
   const token = await page.evaluate(() => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("reCAPTCHA timeout")), 120000);
@@ -171,7 +141,6 @@ async function solveRecaptcha() {
   });
 
   await browser.close();
-  console.log("reCAPTCHA solved.");
   return token;
 }
 
