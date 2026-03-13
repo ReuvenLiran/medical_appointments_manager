@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createInterface } from "readline/promises";
 import { randomUUID } from "crypto";
 import { writeFileSync, mkdirSync } from "fs";
-import { startServer, waitForOtp, stopServer } from "./sms-server.mjs";
+import { SmsClient } from "sms-client";
 
 const BASE_URL = "https://shebaconnect.sheba.co.il/SCDmzService.API/api";
 const SESSION_IP = randomUUID();
@@ -53,6 +53,7 @@ async function sendOTP() {
   });
 
   if (!data.Success) {
+    console.error("SendOTP response:", JSON.stringify(data, null, 2));
     throw new Error(`SendOTP failed: ${data.Error?.Description || "unknown error"}`);
   }
 
@@ -189,6 +190,8 @@ function printAppointments(appointments) {
   }
 }
 
+const sms = new SmsClient();
+
 async function prompt(rl, message) {
   const answer = await rl.question(message);
   return answer.trim();
@@ -199,16 +202,15 @@ async function main() {
   const rl = autoOtp ? null : createInterface({ input: process.stdin, output: process.stdout });
 
   try {
-    if (autoOtp) {
-      await startServer();
-    }
-
     await sendOTP();
 
     let otpCode;
     if (autoOtp) {
       console.log("\nWaiting for OTP from SMS Forwarder...");
-      otpCode = await waitForOtp();
+      otpCode = await sms.waitForOtp({
+        senderPattern: "ShebaOTP",
+        otpPattern: "#(\\d{6})",
+      });
       console.log(`Received OTP: ${otpCode}`);
     } else {
       otpCode = await prompt(rl, "\nEnter the SMS code: ");
@@ -237,7 +239,6 @@ async function main() {
     process.exit(1);
   } finally {
     if (rl) rl.close();
-    if (autoOtp) stopServer();
   }
 }
 
