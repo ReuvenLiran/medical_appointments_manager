@@ -19,32 +19,32 @@ const responseSchema = {
   properties: {
     specialty: {
       type: SchemaType.STRING,
-      description: "שם ההתמחות בעברית, למשל: נוירולוגיה, עיניים, אורתופדיה",
+      description: "Medical specialty name in Hebrew (e.g., נוירולוגיה, עיניים, אורתופדיה)",
     },
     doctor_name: {
       type: SchemaType.STRING,
-      description: "שם הרופא כפי שמופיע במסמך",
+      description: "Doctor's name as it appears in the document",
     },
     visit_date: {
       type: SchemaType.STRING,
-      description: "Must be exactly YYYY-MM-DD format. תאריך הביקור",
+      description: "Visit date, must be exactly YYYY-MM-DD format",
     },
     summary: {
       type: SchemaType.STRING,
-      description: "סיכום הביקור בעברית, 2-4 משפטים",
+      description: "Visit summary in Hebrew, 2-4 sentences",
     },
     medications: {
       type: SchemaType.ARRAY,
       items: {
         type: SchemaType.OBJECT,
         properties: {
-          name: { type: SchemaType.STRING, description: "שם התרופה" },
-          dosage: { type: SchemaType.STRING, description: "מינון, למשל: 40mg x3/week" },
+          name: { type: SchemaType.STRING, description: "Medication name" },
+          dosage: { type: SchemaType.STRING, description: "Dosage, e.g., 40mg x3/week" },
           action: {
             type: SchemaType.STRING,
-            description: "new = תרופה חדשה, continue = ממשיכים, stop = הפסקה, change = שינוי מינון",
+            description: "new = newly prescribed, continue = continuing, stop = discontinued, change = dosage/regimen change",
           },
-          notes: { type: SchemaType.STRING, description: "הערות נוספות" },
+          notes: { type: SchemaType.STRING, description: "Additional notes" },
         },
         required: ["name", "action"],
       },
@@ -54,12 +54,12 @@ const responseSchema = {
       items: {
         type: SchemaType.OBJECT,
         properties: {
-          name: { type: SchemaType.STRING, description: "שם האבחנה / מצב רפואי" },
+          name: { type: SchemaType.STRING, description: "Diagnosis or medical condition name" },
           status: {
             type: SchemaType.STRING,
-            description: "active = פעיל, resolved = נפתר, monitoring = במעקב",
+            description: "active = currently active, resolved = resolved, monitoring = under observation",
           },
-          notes: { type: SchemaType.STRING, description: "הערות נוספות" },
+          notes: { type: SchemaType.STRING, description: "Additional notes" },
         },
         required: ["name", "status"],
       },
@@ -71,12 +71,12 @@ const responseSchema = {
         properties: {
           type: {
             type: SchemaType.STRING,
-            description: "סוג הבדיקה: MRI, blood, imaging, other",
+            description: "Test type: MRI, blood, imaging, other",
           },
-          description: { type: SchemaType.STRING, description: "תיאור הבדיקה" },
+          description: { type: SchemaType.STRING, description: "Test description" },
           urgency: {
             type: SchemaType.STRING,
-            description: "routine = שגרתי, urgent = דחוף",
+            description: "routine or urgent",
           },
           due_date: {
             type: SchemaType.STRING,
@@ -95,7 +95,7 @@ const responseSchema = {
             type: SchemaType.STRING,
             description: "test | medication_change | lifestyle | referral | follow_up",
           },
-          description: { type: SchemaType.STRING, description: "תיאור ההמלצה" },
+          description: { type: SchemaType.STRING, description: "Recommendation description" },
           due_date: {
             type: SchemaType.STRING,
             description: "Must be exactly YYYY-MM-DD format if available, otherwise empty string",
@@ -109,7 +109,7 @@ const responseSchema = {
       items: {
         type: SchemaType.OBJECT,
         properties: {
-          directive: { type: SchemaType.STRING, description: "ההנחיה" },
+          directive: { type: SchemaType.STRING, description: "The directive" },
           category: {
             type: SchemaType.STRING,
             description: "diet | exercise | sleep | vitamins | other",
@@ -122,26 +122,27 @@ const responseSchema = {
   required: ["specialty", "summary", "medications", "conditions", "recommendations"],
 };
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview";
+
 const model = genAI.getGenerativeModel({
-  model: "gemini-3.1-flash-lite-preview",
+  model: GEMINI_MODEL,
   generationConfig: {
     responseMimeType: "application/json",
     responseSchema,
   },
 });
 
-const PROMPT = `אתה מומחה לניתוח מסמכים רפואיים בעברית. הטקסט הבא הוא סיכום ביקור רפואי לאחר שהוסרו ממנו פרטים מזהים של המטופל.
+const PROMPT = `You are an expert at analyzing Hebrew medical documents. The following text is a medical visit summary with patient-identifying information already redacted.
 
-חלץ את כל המידע המובנה מהמסמך בצורה מדויקת.
+Extract all structured information from the document accurately.
 
-כללים חשובים:
-- כל התאריכים חייבים להיות בפורמט YYYY-MM-DD בלבד
-- אם אין תאריך, השאר שדה ריק
-- שם ההתמחות חייב להיות בעברית (נוירולוגיה, עיניים, אורתופדיה וכו׳)
-- עבור תרופות: action חייב להיות אחד מ: new, continue, stop, change
-- עבור מצבים רפואיים: status חייב להיות אחד מ: active, resolved, monitoring
-- עבור המלצות: type חייב להיות אחד מ: test, medication_change, lifestyle, referral, follow_up
-- הסיכום צריך להיות בעברית, 2-4 משפטים
+Critical rules:
+- All dates must be in YYYY-MM-DD format only. If no date is available, leave the field empty.
+- The specialty name must be in Hebrew (e.g., נוירולוגיה, עיניים, אורתופדיה).
+- For medications: extract ONLY medications that the authoring doctor directly manages or prescribes. Do NOT include medications mentioned as background or managed by a different clinic/specialty. The "action" field must be one of: new, continue, stop, change.
+- For conditions: "status" must be one of: active, resolved, monitoring.
+- For recommendations: "type" must be one of: test, medication_change, lifestyle, referral, follow_up.
+- The summary must be written in Hebrew, 2-4 sentences.
 
 הטקסט:
 ---

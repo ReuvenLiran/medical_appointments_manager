@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { readFileSync } from "fs";
+import { normalizeMedName, normalizeConditionName } from "./normalize.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(__dirname, "health.db");
@@ -143,6 +145,17 @@ export function initDB() {
     `);
   }
 
+  // ── Schema migrations (safe to run repeatedly) ──
+  const colExists = (table, col) =>
+    db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, col);
+
+  if (!colExists("appointments", "appointment_time")) {
+    db.exec(`ALTER TABLE appointments ADD COLUMN appointment_time TEXT CHECK(appointment_time IS NULL OR appointment_time LIKE '__:__')`);
+  }
+  if (!colExists("medications", "latest_doc_id")) {
+    db.exec(`ALTER TABLE medications ADD COLUMN latest_doc_id INTEGER REFERENCES documents(id)`);
+  }
+
   _db = db;
   return db;
 }
@@ -197,13 +210,14 @@ export function upsertDocument(doc) {
 export function upsertAppointments(appointments) {
   const db = initDB();
   const upsert = db.prepare(`
-    INSERT INTO appointments (sheba_doc_id, appointment_type, service, location, appointment_date, status, invite_pdf_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO appointments (sheba_doc_id, appointment_type, service, location, appointment_date, appointment_time, status, invite_pdf_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sheba_doc_id) DO UPDATE SET
       appointment_type = excluded.appointment_type,
       service = excluded.service,
       location = excluded.location,
       appointment_date = excluded.appointment_date,
+      appointment_time = excluded.appointment_time,
       status = excluded.status,
       invite_pdf_path = excluded.invite_pdf_path
   `);
@@ -212,8 +226,8 @@ export function upsertAppointments(appointments) {
     for (const apt of items) {
       upsert.run(
         apt.sheba_doc_id, apt.appointment_type ?? null, apt.service ?? null,
-        apt.location ?? null, apt.appointment_date, apt.status ?? "NEW",
-        apt.invite_pdf_path ?? null
+        apt.location ?? null, apt.appointment_date, apt.appointment_time ?? null,
+        apt.status ?? "NEW", apt.invite_pdf_path ?? null
       );
     }
   });
@@ -399,4 +413,161 @@ export function getMedicationHistory(name) {
     WHERE m.name = ?
     ORDER BY m.started_date ASC
   `).all(name);
+}
+
+// ─── Entity Resolution ──────────────────────────────────────────
+
+export function getDocumentByFilename(filename) {
+  const db = initDB();
+  return db.prepare("SELECT * FROM documents WHERE filename = ?").get(filename);
+}
+
+export function getAllActiveMedicationNames() {
+  const db = initDB();
+  return db.prepare("SELECT id, name FROM medications WHERE status = 'active'").all();
+}
+
+/**
+ * Find an active medication by normalized name.
+ * Fetches all active meds, normalizes each in JS, and matches against the given key.
+ */
+export function findMedicationByNormalizedName(key) {
+  const meds = getAllActiveMedicationNames();
+  for (const med of meds) {
+    const { key: medKey } = normalizeMedName(med.name);
+    if (medKey === key) {
+      const db = initDB();
+      return db.prepare(`
+        SELECT m.*, s.name AS prescriber_specialty
+        FROM medications m
+        JOIN specialties s ON m.prescriber_specialty_id = s.id
+        WHERE m.id = ?
+      `).get(med.id);
+    }
+  }
+  return null;
+}
+
+/**
+ * Find a condition by normalized name.
+ * Fetches all active/monitoring conditions, normalizes each in JS, matches.
+ */
+export function findConditionByNormalizedName(key) {
+  const db = initDB();
+  const conditions = db.prepare(
+    "SELECT id, name FROM conditions WHERE status IN ('active', 'monitoring')"
+  ).all();
+  for (const cond of conditions) {
+    const { key: condKey } = normalizeConditionName(cond.name);
+    if (condKey === key) {
+      return db.prepare(`
+        SELECT c.*, s.name AS diagnosing_specialty
+        FROM conditions c
+        LEFT JOIN specialties s ON c.diagnosing_specialty_id = s.id
+        WHERE c.id = ?
+      `).get(cond.id);
+    }
+  }
+  return null;
+}
+
+/**
+ * Update medication after clinical review (action=continue).
+ * Updates latest_doc_id and optionally notes.
+ */
+export function updateMedicationReview(id, { latest_doc_id, notes } = {}) {
+  const db = initDB();
+  const fields = [];
+  const values = [];
+  if (latest_doc_id !== undefined) { fields.push("latest_doc_id = ?"); values.push(latest_doc_id); }
+  if (notes !== undefined) { fields.push("notes = ?"); values.push(notes); }
+  if (fields.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE medications SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/**
+ * Delete all recommendations tied to a specific document (for idempotent re-processing).
+ */
+export function deleteRecommendationsByDocId(docId) {
+  const db = initDB();
+  return db.prepare("DELETE FROM recommendations WHERE source_doc_id = ?").run(docId);
+}
+
+/**
+ * Cascading delete of all entities tied to a document.
+ * Used by --force re-processing to clear old data before re-extraction.
+ */
+export function deleteDocumentCascading(docId) {
+  const db = initDB();
+  const run = db.transaction(() => {
+    // Delete entity links referencing medications/conditions/recommendations from this doc
+    const medIds = db.prepare("SELECT id FROM medications WHERE started_from_doc_id = ?").all(docId).map(r => r.id);
+    const condIds = db.prepare("SELECT id FROM conditions WHERE first_doc_id = ?").all(docId).map(r => r.id);
+    const recIds = db.prepare("SELECT id FROM recommendations WHERE source_doc_id = ?").all(docId).map(r => r.id);
+
+    const allIds = [
+      ...medIds.map(id => ({ type: "medication", id })),
+      ...condIds.map(id => ({ type: "condition", id })),
+      ...recIds.map(id => ({ type: "recommendation", id })),
+    ];
+
+    for (const { type, id } of allIds) {
+      db.prepare("DELETE FROM entity_links WHERE (source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)").run(type, id, type, id);
+    }
+
+    // Delete alerts referencing these entities
+    db.prepare("DELETE FROM alerts WHERE related_entity_ids IS NOT NULL AND resolved = 0").run();
+
+    // Delete the entities themselves
+    db.prepare("DELETE FROM recommendations WHERE source_doc_id = ?").run(docId);
+    db.prepare("DELETE FROM medications WHERE started_from_doc_id = ?").run(docId);
+    db.prepare("DELETE FROM conditions WHERE first_doc_id = ?").run(docId);
+  });
+  run();
+}
+
+/**
+ * Sync appointments from appointments.json into the database.
+ * Splits dtAppointmentDate into date (YYYY-MM-DD) and time (HH:MM).
+ */
+export function syncAppointmentsFromJson(jsonPath) {
+  const raw = readFileSync(jsonPath, "utf-8");
+  const items = JSON.parse(raw);
+
+  const mapped = items.map(item => {
+    const dt = item.dtAppointmentDate ?? "";
+    const [datePart, timePart] = dt.split("T");
+    return {
+      sheba_doc_id: item.sDocID,
+      appointment_type: item.sAppointmentType ?? null,
+      service: item.Service ?? null,
+      location: item.sLocationDesc ?? null,
+      appointment_date: datePart,
+      appointment_time: timePart ? timePart.slice(0, 5) : null,
+      status: item.sAppointmentStatus ?? "NEW",
+      invite_pdf_path: null,
+    };
+  });
+
+  upsertAppointments(mapped);
+  return mapped.length;
+}
+
+// ─── Additional Queries ─────────────────────────────────────────
+
+export function getRecentDocuments(limit = 10) {
+  const db = initDB();
+  return db.prepare(`
+    SELECT d.*, s.name AS specialty
+    FROM documents d
+    LEFT JOIN specialties s ON d.specialty_id = s.id
+    ORDER BY d.processed_at DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+export function getAllAppointments() {
+  const db = initDB();
+  return db.prepare("SELECT * FROM appointments ORDER BY appointment_date ASC").all();
 }
