@@ -323,14 +323,14 @@ export async function matchRecommendationsToAppointments() {
 
   const prompt = `You are a medical scheduling assistant. Match each recommendation to the most appropriate upcoming appointment, if one exists.
 
-Each recommendation has a "from" (who wrote it) and optionally a "target" (which specialty should fulfill it). Use target_specialty to guide matching — e.g., a recommendation with target: עיניים should match ophthalmology appointments, not neurology.
+Each recommendation has a "from" (who wrote it) and optionally a "target" (which specialty should fulfill it). Use target_specialty to guide matching.
 
 Important matching rules:
-- A general referral like "המשך מעקב" (continue follow-up) at some clinic should NEVER be matched to any appointment. These are ongoing care instructions, not specific schedulable actions. Only match recommendations that describe a specific test, procedure, or a concrete follow-up visit ordered by the authoring doctor.
-- Only match a recommendation to an appointment if the recommendation describes a specific action that the appointment directly fulfills (e.g., "MRI מוח" → brain MRI appointment, "OCT" → OCT appointment, "ביקורת במרפאת גלאוקומה" → glaucoma clinic visit).
-- Each test recommendation should match exactly ONE appointment (the most specific match).
-- When multiple similar appointments exist (e.g., two OCT exams on different dates), use the due_date to pick the one closest in time. The due_date reflects when the ordering doctor intended the test to be done.
-- Do NOT match a referral/follow_up from specialty A to an appointment that was clearly scheduled by specialty B for its own purposes.
+- A general referral (e.g., "המשך מעקב" / continue follow-up) should NEVER be matched. These are ongoing care instructions, not specific schedulable actions. Only match recommendations that describe a specific test, procedure, or a concrete visit.
+- Only match when the recommendation describes a specific action that the appointment directly fulfills.
+- Each test recommendation should match exactly ONE appointment.
+- When multiple similar appointments exist, use the due_date to pick the one closest in time. The due_date reflects when the ordering doctor intended the test to be done.
+- Do NOT match a referral from specialty A to an appointment scheduled by specialty B for its own purposes.
 
 Recommendations:
 ${recsText}

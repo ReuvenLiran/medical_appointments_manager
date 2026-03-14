@@ -146,25 +146,15 @@ Extract all structured information from the document accurately.
 
 Critical rules:
 - All dates must be in YYYY-MM-DD format only. If no date is available, leave the field empty.
-- The specialty name must be in Hebrew (e.g., נוירולוגיה, עיניים, אורתופדיה).
+- The specialty name must be in Hebrew.
 - For medications: extract ONLY medications that the authoring doctor directly manages or prescribes. Do NOT include medications mentioned as background or managed by a different clinic/specialty. The "action" field must be one of: new, continue, stop, change.
 - For conditions: "status" must be one of: active, resolved, monitoring.
 - For recommendations: "type" must be one of: test, medication_change, lifestyle, referral, follow_up.
-- For recommendations: include target_specialty — the specialty that should fulfill the recommendation, in Hebrew.
-  If the recommendation is a referral to another specialty, set target_specialty to that specialty (e.g., עיניים, כבד, הדמיה).
-  If the recommendation is a follow-up with the authoring doctor, leave target_specialty as empty string.
-- For tests_ordered and test recommendations: create a SEPARATE entry for each distinct test or scan.
-  Example: if the doctor orders "MRI מוח ו-MRI עמוד שדרה צווארי", create TWO test entries:
-  one for "MRI מוח" and one for "MRI עמוד שדרה צווארי". Each test is a separate appointment.
-- For recommendations: create a SEPARATE entry for each distinct action.
-  If the doctor orders a test AND schedules a follow-up visit, create two entries:
-  one [test] for the test, one [follow_up] for the visit. Never combine them into one entry.
-- IMPORTANT: Do NOT create duplicate entries. Each distinct action should appear ONCE — either in tests_ordered OR in recommendations, never in both. If a test appears in tests_ordered, do NOT also add it as a [test] recommendation. Avoid any repetition.
-- For due_date on ALL recommendations and tests_ordered: convert relative timeframes to actual dates using the document's visit date.
-  Example: if the visit date is 2025-01-13 and the doctor says "בעוד חודשיים" (in 2 months), set due_date to "2025-03-13".
-  Example: if the visit date is 2025-12-21 and the doctor says "בעוד 3-4 חודשים", set due_date to "2026-03-21".
-  If a test or follow-up has a timeframe mentioned anywhere in the document, you MUST set its due_date.
-  This is critical for matching recommendations to the correct appointment.
+- For recommendations: include target_specialty — the specialty that should fulfill the recommendation, in Hebrew. If the recommendation is a referral to another specialty, set target_specialty to that specialty. If it is a follow-up with the authoring doctor, leave target_specialty as empty string.
+- When multiple distinct tests or scans are ordered, create a SEPARATE entry for each one. Each test that requires its own appointment must be its own entry.
+- Create a SEPARATE entry for each distinct action. A test order and a follow-up visit are two different actions — never combine them into one entry.
+- Do NOT create duplicate entries. Each action should appear ONCE — either in tests_ordered OR in recommendations, never in both.
+- For due_date: convert relative timeframes to actual dates using the document's visit date. For example, "בעוד חודשיים" from a visit on 2025-06-01 becomes 2025-08-01. If a test or follow-up mentions any timeframe, you MUST set its due_date. This is critical for matching recommendations to appointments.
 - The summary must be written in Hebrew, 2-4 sentences.
 
 הטקסט:
