@@ -3,7 +3,8 @@ node_modules/
 זימונים
 appointments.json
 summaries
-pii-report.json
+pii-report*.json
+.DS_Store
 redacted-*
 health.db
 health.db-wal

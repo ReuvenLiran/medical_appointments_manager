@@ -3,7 +3,9 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from "f
 import { basename, join, extname } from "path";
 import { PDFParse } from "pdf-parse";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { ollamaDetectPII, mergeKnownPII, redactByCategories, PII_CATEGORIES } from "./pii-redactor.mjs";
+import { ollamaDetectPII, mergeKnownPII } from "pii-tools/lib/detector.mjs";
+import { redactByCategories } from "pii-tools/lib/redactor.mjs";
+import { PII_CATEGORIES } from "pii-tools/lib/constants.mjs";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) {
