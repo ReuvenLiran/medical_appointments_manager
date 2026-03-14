@@ -1,0 +1,49 @@
+{
+  "pdfPath": "medical_summaries/סיכום נוירולוג 21-12-2025.pdf",
+  "report": {
+    "patient_names": [
+      "ראובן",
+      "ניסים לירן",
+      "שי מנשקו",
+      "טלי דרורי"
+    ],
+    "doctor_names": [
+      "ויקטוריה גוטקין",
+      "שי מנשקו",
+      "טלי דרורי"
+    ],
+    "patient_id": [
+      "308045814",
+      "31351.ר.מ"
+    ],
+    "patient_phone": [
+      "0585624796"
+    ],
+    "clinic_phones": [
+      "035303911",
+      "035309050"
+    ],
+    "addresses": [
+      "גן רמת 9 עזריאל",
+      "5265601 השומר-תל",
+      "TEL-HASHOMER 5265601, ISRAEL"
+    ],
+    "emails": [
+      "mirp.ms@sheba.gov.il"
+    ],
+    "credit_cards": [],
+    "bank_accounts": [],
+    "date_of_birth": [],
+    "national_insurance": [],
+    "passport": [],
+    "drivers_license": [],
+    "medical_record_number": [],
+    "insurance_info": [
+      "MS מבחינת קלינית יציב לביקורת חזר"
+    ],
+    "urls": [
+      "http://www.btl.gov.il",
+      "https://www.sheba.co.il"
+    ]
+  }
+}

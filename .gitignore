@@ -2,3 +2,10 @@ node_modules/
 .env
 זימונים
 appointments.json
+summaries
+pii-report.json
+redacted-*
+health.db
+health.db-wal
+health.db-shm
+medical_summaries

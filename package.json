@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": " node index.mjs --auto-otp",
+    "summarize": "node summarize.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -11,10 +12,14 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^17.3.1",
+    "pdf-parse": "^2.4.5",
     "puppeteer": "^24.39.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "better-sqlite3": "^11.0.0",
+    "pii-tools": "file:../pii-tools",
     "sms-client": "file:../sms-forwarder/client"
   }
 }

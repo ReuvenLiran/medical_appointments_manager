@@ -1,0 +1,30 @@
+{
+  "pdfPath": "/Users/liranreuven/Downloads/4c242280-627b-4415-8332-7f41e503017a.pdf",
+  "report": {
+    "patient_names": [
+      "ראובן",
+      "ניסים לירן",
+      "צביה בורגנסקי"
+    ],
+    "doctor_names": [
+      "צביה בורגנסקי",
+      "לוי ליאור"
+    ],
+    "patient_id": [
+      "308045814",
+      "30042894"
+    ],
+    "patient_phone": [
+      "0585624796"
+    ],
+    "clinic_phones": [
+      "035305000",
+      "035305001"
+    ],
+    "addresses": [
+      "גן רמת 9 עזריאל",
+      "TEL-HASHOMER 5265601, ISRAEL"
+    ],
+    "emails": []
+  }
+}
