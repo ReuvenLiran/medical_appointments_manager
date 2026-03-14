@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { normalizeMedName, normalizeConditionName } from "./normalize.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -155,6 +155,21 @@ export function initDB() {
   if (!colExists("medications", "latest_doc_id")) {
     db.exec(`ALTER TABLE medications ADD COLUMN latest_doc_id INTEGER REFERENCES documents(id)`);
   }
+  if (!colExists("recommendations", "target_specialty_id")) {
+    db.exec(`ALTER TABLE recommendations ADD COLUMN target_specialty_id INTEGER REFERENCES specialties(id)`);
+  }
+
+  // Junction table for many-to-many recommendation ↔ appointment matching
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recommendation_matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recommendation_id INTEGER NOT NULL REFERENCES recommendations(id) ON DELETE CASCADE,
+      appointment_id INTEGER NOT NULL REFERENCES appointments(id),
+      reason TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(recommendation_id, appointment_id)
+    )
+  `);
 
   _db = db;
   return db;
@@ -258,6 +273,24 @@ export function discontinueMedication(id, { docId, date, newStatus = "discontinu
   `).run(newStatus, docId ?? null, date ?? null, id);
 }
 
+/**
+ * Generic medication status update. Supports any valid status transition.
+ */
+export function updateMedicationStatus(id, { status, docId, date, notes } = {}) {
+  const db = initDB();
+  const fields = [];
+  const values = [];
+
+  if (status !== undefined) { fields.push("status = ?"); values.push(status); }
+  if (docId !== undefined) { fields.push("discontinued_from_doc_id = ?"); values.push(docId); }
+  if (date !== undefined) { fields.push("discontinued_date = ?"); values.push(date); }
+  if (notes !== undefined) { fields.push("notes = ?"); values.push(notes); }
+
+  if (fields.length === 0) return;
+  values.push(id);
+  return db.prepare(`UPDATE medications SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+}
+
 // ─── Conditions ──────────────────────────────────────────────────
 
 export function addCondition(cond) {
@@ -292,11 +325,12 @@ export function updateCondition(id, updates) {
 export function addRecommendation(rec) {
   const db = initDB();
   const specialtyId = getOrCreateSpecialty(rec.requesting_specialty);
+  const targetSpecialtyId = rec.target_specialty ? getOrCreateSpecialty(rec.target_specialty) : null;
   return db.prepare(`
-    INSERT INTO recommendations (type, description, requesting_specialty_id, source_doc_id, due_date)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO recommendations (type, description, requesting_specialty_id, target_specialty_id, source_doc_id, due_date)
+    VALUES (?, ?, ?, ?, ?, ?)
   `).run(
-    rec.type, rec.description, specialtyId,
+    rec.type, rec.description, specialtyId, targetSpecialtyId,
     rec.source_doc_id ?? null, rec.due_date ?? null
   ).lastInsertRowid;
 }
@@ -353,9 +387,10 @@ export function getActiveConditions() {
 export function getPendingRecommendations() {
   const db = initDB();
   return db.prepare(`
-    SELECT r.*, s.name AS requesting_specialty
+    SELECT r.*, s.name AS requesting_specialty, ts.name AS target_specialty
     FROM recommendations r
     JOIN specialties s ON r.requesting_specialty_id = s.id
+    LEFT JOIN specialties ts ON r.target_specialty_id = ts.id
     WHERE r.status = 'pending'
   `).all();
 }
@@ -372,19 +407,48 @@ export function getFutureAppointments() {
 export function getUnmatchedRecommendations() {
   const db = initDB();
   return db.prepare(`
-    SELECT r.*, s.name AS requesting_specialty
+    SELECT r.*, s.name AS requesting_specialty, ts.name AS target_specialty
     FROM recommendations r
     JOIN specialties s ON r.requesting_specialty_id = s.id
-    WHERE r.status = 'pending' AND r.matched_appointment_id IS NULL
+    LEFT JOIN specialties ts ON r.target_specialty_id = ts.id
+    WHERE r.status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM recommendation_matches rm WHERE rm.recommendation_id = r.id)
   `).all();
 }
 
-export function matchRecommendationToAppointment(recId, aptId) {
+export function matchRecommendationToAppointment(recId, aptId, reason) {
+  const db = initDB();
+  db.prepare(`
+    INSERT INTO recommendation_matches (recommendation_id, appointment_id, reason)
+    VALUES (?, ?, ?)
+    ON CONFLICT(recommendation_id, appointment_id) DO UPDATE SET reason = excluded.reason
+  `).run(recId, aptId, reason ?? null);
+  db.prepare(`
+    UPDATE recommendations SET status = 'matched'
+    WHERE id = ?
+  `).run(recId);
+}
+
+export function getMatchesForAppointment(aptId) {
   const db = initDB();
   return db.prepare(`
-    UPDATE recommendations SET matched_appointment_id = ?, status = 'matched'
-    WHERE id = ?
-  `).run(aptId, recId);
+    SELECT r.*, s.name AS requesting_specialty, ts.name AS target_specialty, rm.reason
+    FROM recommendation_matches rm
+    JOIN recommendations r ON rm.recommendation_id = r.id
+    JOIN specialties s ON r.requesting_specialty_id = s.id
+    LEFT JOIN specialties ts ON r.target_specialty_id = ts.id
+    WHERE rm.appointment_id = ?
+  `).all(aptId);
+}
+
+export function getMatchesForRecommendation(recId) {
+  const db = initDB();
+  return db.prepare(`
+    SELECT a.*, rm.reason
+    FROM recommendation_matches rm
+    JOIN appointments a ON rm.appointment_id = a.id
+    WHERE rm.recommendation_id = ?
+  `).all(recId);
 }
 
 export function searchDocuments(query) {
@@ -528,16 +592,53 @@ export function deleteDocumentCascading(docId) {
 }
 
 /**
+ * Resolve the invite PDF filename for an appointment, matching
+ * the naming convention used by index.mjs downloadInvite().
+ */
+export function resolveInvitePdfFilename(item) {
+  const dt = item.dtAppointmentDate ?? "";
+  const d = new Date(dt);
+  if (isNaN(d.getTime())) return null;
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+
+  let name;
+  if (item.sLocationDesc === "מרכז לטרשת נפוצה" && item.Service === "אחות בחדר טיפולים") {
+    name = "טיפול טרשת נפוצה";
+  } else if (item.Service) {
+    name = `${item.sAppointmentType} - ${item.Service}`;
+  } else {
+    name = item.sAppointmentType;
+  }
+
+  return `${name} - ${dd}-${mm}-${yyyy}.pdf`;
+}
+
+/**
  * Sync appointments from appointments.json into the database.
  * Splits dtAppointmentDate into date (YYYY-MM-DD) and time (HH:MM).
+ * Resolves invite PDF paths from the זימונים/ directory.
  */
 export function syncAppointmentsFromJson(jsonPath) {
   const raw = readFileSync(jsonPath, "utf-8");
   const items = JSON.parse(raw);
+  const inviteDir = join(dirname(jsonPath), "זימונים");
 
   const mapped = items.map(item => {
     const dt = item.dtAppointmentDate ?? "";
     const [datePart, timePart] = dt.split("T");
+
+    const pdfFilename = resolveInvitePdfFilename(item);
+    let invitePath = null;
+    if (pdfFilename) {
+      const fullPath = join(inviteDir, pdfFilename);
+      if (existsSync(fullPath)) {
+        invitePath = fullPath;
+      }
+    }
+
     return {
       sheba_doc_id: item.sDocID,
       appointment_type: item.sAppointmentType ?? null,
@@ -546,7 +647,7 @@ export function syncAppointmentsFromJson(jsonPath) {
       appointment_date: datePart,
       appointment_time: timePart ? timePart.slice(0, 5) : null,
       status: item.sAppointmentStatus ?? "NEW",
-      invite_pdf_path: null,
+      invite_pdf_path: invitePath,
     };
   });
 

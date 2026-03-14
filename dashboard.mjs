@@ -15,6 +15,7 @@ import {
   getUnresolvedAlerts,
   getRecentDocuments,
   getAllAppointments,
+  getMatchesForRecommendation,
 } from "./db.mjs";
 
 // ─── ANSI Colors ────────────────────────────────────────────────
@@ -145,12 +146,18 @@ function main() {
     console.log(`    ${C.dim}No pending recommendations.${C.reset}`);
   } else {
     for (const r of recs) {
-      const isUnmatched = unmatched.some(u => u.id === r.id);
+      const matchedApts = getMatchesForRecommendation(r.id);
+      const isUnmatched = matchedApts.length === 0;
       const badge = isUnmatched
         ? `${C.yellow}⚠ UNMATCHED${C.reset}`
-        : `${C.green}✓ matched${C.reset}`;
+        : `${C.green}✓ matched (${matchedApts.length})${C.reset}`;
       console.log(`    [${C.cyan}${r.type}${C.reset}] ${r.description} ${badge}`);
-      console.log(`      ${C.dim}From: ${r.requesting_specialty}${C.reset}`);
+      const target = r.target_specialty ? ` → ${C.magenta}${r.target_specialty}${C.reset}` : "";
+      console.log(`      ${C.dim}From: ${r.requesting_specialty}${C.reset}${target}`);
+      for (const apt of matchedApts) {
+        const time = apt.appointment_time ? ` ${apt.appointment_time}` : "";
+        console.log(`      ${C.green}↳${C.reset} ${C.blue}${apt.appointment_date}${time}${C.reset} ${apt.appointment_type}${apt.reason ? ` ${C.dim}(${apt.reason})${C.reset}` : ""}`);
+      }
     }
   }
 

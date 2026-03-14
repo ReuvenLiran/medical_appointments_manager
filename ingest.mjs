@@ -9,7 +9,8 @@
 import "dotenv/config";
 import { basename, join, resolve } from "path";
 import { readdirSync, statSync, existsSync } from "fs";
-import { processDocument } from "./entity-extractor.mjs";
+import { processDocument, DEFAULT_REMOVE } from "./entity-extractor.mjs";
+import { PII_CATEGORIES } from "pii-tools/lib/constants.mjs";
 import { normalizeMedName, normalizeConditionName } from "./normalize.mjs";
 import { runAllChecks } from "./health-graph.mjs";
 import {
@@ -37,14 +38,32 @@ import {
 // ─── CLI Argument Parsing ───────────────────────────────────────
 
 const args = process.argv.slice(2);
+
+const removeIdx = args.indexOf("--remove");
+let categoriesToRemove = DEFAULT_REMOVE;
+if (removeIdx !== -1 && args[removeIdx + 1]) {
+  const indices = args[removeIdx + 1].split(",").map(Number);
+  categoriesToRemove = indices
+    .filter(i => i >= 0 && i < PII_CATEGORIES.length)
+    .map(i => PII_CATEGORIES[i]);
+  if (categoriesToRemove.length === 0) {
+    console.error("Invalid --remove indices. Valid range: 0-" + (PII_CATEGORIES.length - 1));
+    console.error("Categories:", PII_CATEGORIES.map((c, i) => `  ${i}: ${c}`).join("\n"));
+    process.exit(1);
+  }
+}
+
 const flags = {
   dryRun: args.includes("--dry-run"),
   force: args.includes("--force"),
 };
 
-const inputPath = args.find(a => !a.startsWith("--"));
+const removeValueIdx = removeIdx !== -1 ? removeIdx + 1 : -1;
+const inputPath = args.find((a, i) => !a.startsWith("--") && i !== removeValueIdx);
 if (!inputPath) {
-  console.error("Usage: node ingest.mjs <path-to-pdf-or-directory> [--dry-run] [--force]");
+  console.error("Usage: node ingest.mjs <path-to-pdf-or-directory> [--remove 0,2,3,5,6] [--dry-run] [--force]");
+  console.error("\nPII categories:");
+  PII_CATEGORIES.forEach((c, i) => console.error(`  ${i}: ${c}`));
   process.exit(1);
 }
 
@@ -211,20 +230,24 @@ function resolveRecommendations(entities, specialty, docId, stats) {
     ...(entities.tests_ordered ?? []).map(t => ({
       type: "test",
       description: t.description,
+      target_specialty: t.target_specialty,
       due_date: t.due_date,
     })),
   ];
 
   const recIds = [];
   for (const rec of allRecs) {
+    const targetSpec = rec.target_specialty && rec.target_specialty.trim() ? rec.target_specialty.trim() : null;
     const id = addRecommendation({
       type: rec.type,
       description: rec.description,
       requesting_specialty: specialty,
+      target_specialty: targetSpec,
       source_doc_id: docId,
       due_date: rec.due_date ?? null,
     });
-    console.log(`  + Recommendation: [${rec.type}] ${rec.description} (id=${id})`);
+    const targetLabel = targetSpec ? ` → ${targetSpec}` : "";
+    console.log(`  + Recommendation: [${rec.type}] ${rec.description}${targetLabel} (id=${id})`);
     recIds.push(id);
     stats.recsAdded++;
   }
@@ -284,7 +307,7 @@ async function ingestPDF(pdfPath, stats) {
   }
 
   // Run extraction pipeline
-  const { redactedText, entities } = await processDocument(pdfPath);
+  const { redactedText, entities } = await processDocument(pdfPath, { categoriesToRemove });
 
   // Store document
   const docId = upsertDocument({
@@ -363,7 +386,7 @@ async function main() {
     console.log(`\n${"═".repeat(60)}`);
     console.log("  HEALTH INTELLIGENCE CHECKS");
     console.log("═".repeat(60));
-    runAllChecks();
+    await runAllChecks();
   }
 
   // Print summary
