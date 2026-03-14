@@ -5,6 +5,9 @@
   "scripts": {
     "start": " node index.mjs --auto-otp",
     "summarize": "node summarize.mjs",
+    "server": "node server.mjs",
+    "web:dev": "cd web && npx vite",
+    "web:build": "cd web && npx vite build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

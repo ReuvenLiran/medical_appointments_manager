@@ -10,3 +10,4 @@ health.db
 health.db-wal
 health.db-shm
 medical_summaries
+web/dist
